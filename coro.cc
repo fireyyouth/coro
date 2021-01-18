@@ -18,15 +18,11 @@ struct CoroManager {
 };
 
 CoroManager manager;
-
 Coro *current = nullptr;
-
-bool on_manager_stack = true;
 
 
 void CoroManagerSchedule() {
     while (!manager.coro_queue.empty()) {
-        assert(on_manager_stack);
 
         current = manager.coro_queue.front();
         manager.coro_queue.pop_front();
@@ -36,18 +32,14 @@ void CoroManagerSchedule() {
         asm ("movq %%rsp, %0" : "=m"(manager.sp) : :);
 
         // switch to coro ctx
-        on_manager_stack = false;
         asm ("movq %0, %%rsp" : : "m"(current->sp) :);
         asm ("jmpq *%0" : : "m"(current->ip) :);
 
         asm ("manager_resume_point:");
-        on_manager_stack = true;
     }
 }
 
 void CoroYield() {
-    assert(!on_manager_stack);
-
     // save coro ctx
     asm ("movq $coro_resume_point, %0" : "=m"(current->ip) : :);
     asm ("movq %%rsp, %0" : "=m"(current->sp) : :);
@@ -62,21 +54,8 @@ void CoroYield() {
     asm ("coro_resume_point:");
 }
 
-void FreeWrapper(void *p) {
-    printf("%s: %p\n", __func__, p);
-    free(p);
-}
-
-void *MallocWrapper(size_t size) {
-    auto r = malloc(size);
-    printf("%s: %p\n", __func__, r);
-    return r;
-}
-
 void CoroOnExit() {
-    assert(!on_manager_stack);
-
-    FreeWrapper(current);
+    free(current);
     current = nullptr;
 
     // switch to manager ctx
@@ -86,7 +65,7 @@ void CoroOnExit() {
 
 
 void CoroCreate(void (*work)()) {
-    auto coro = (Coro *)MallocWrapper(sizeof(Coro));
+    auto coro = (Coro *)malloc(sizeof(Coro));
     coro->sp = (void *)(((uint64_t)coro->end >> 3) << 3); // align to 8 bytes
     (uint64_t &)coro->sp -= 8;
     *((uint64_t *)coro->sp) = (uint64_t)&CoroOnExit;
@@ -94,7 +73,6 @@ void CoroCreate(void (*work)()) {
 
     manager.coro_queue.push_back(coro);
 }
-
 
 
 void f() {
