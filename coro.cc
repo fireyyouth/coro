@@ -21,8 +21,8 @@ CoroManager manager;
 Coro *current = nullptr;
 
 
-void CoroManagerSchedule() {
-    while (!manager.coro_queue.empty()) {
+void CoroInit() {
+    if (!manager.coro_queue.empty()) {
 
         current = manager.coro_queue.front();
         manager.coro_queue.pop_front();
@@ -39,28 +39,33 @@ void CoroManagerSchedule() {
     }
 }
 
-void CoroYield() {
-    // save coro ctx
+void CoroSchedule() {
+    // save old coro ctx
     asm ("movq $coro_resume_point, %0" : "=m"(current->ip) : :);
     asm ("movq %%rsp, %0" : "=m"(current->sp) : :);
-
     manager.coro_queue.push_back(current);
-    current = nullptr;
-
-    // switch to manager ctx
-    asm ("movq %0, %%rsp" : : "m"(manager.sp) :);
-    asm ("jmpq *%0" : : "m"(manager.ip) :);
-
+    current = manager.coro_queue.front();
+    manager.coro_queue.pop_front();
+    // switch to new coro ctx
+    asm ("movq %0, %%rsp" : : "m"(current->sp) :);
+    asm ("jmpq *%0" : : "m"(current->ip) :);
     asm ("coro_resume_point:");
 }
 
 void CoroOnExit() {
     free(current);
     current = nullptr;
-
-    // switch to manager ctx
-    asm ("movq %0, %%rsp" : : "m"(manager.sp) :);
-    asm ("jmpq *%0" : : "m"(manager.ip) :);
+    if (manager.coro_queue.empty()) {
+        // switch to manager ctx
+        asm ("movq %0, %%rsp" : : "m"(manager.sp) :);
+        asm ("jmpq *%0" : : "m"(manager.ip) :);
+    } else {
+        current = manager.coro_queue.front();
+        manager.coro_queue.pop_front();
+        // switch to coro ctx
+        asm ("movq %0, %%rsp" : : "m"(current->sp) :);
+        asm ("jmpq *%0" : : "m"(current->ip) :);
+    }
 }
 
 
@@ -77,13 +82,13 @@ void CoroCreate(void (*work)()) {
 
 void f() {
     printf("%d\n", __LINE__);
-    CoroYield();
+    CoroSchedule();
     printf("%d\n", __LINE__);
 }
 
 void g() {
     printf("%d\n", __LINE__);
-    CoroYield();
+    CoroSchedule();
     printf("%d\n", __LINE__);
 }
 
@@ -91,5 +96,5 @@ void g() {
 int main() {
     CoroCreate(f);
     CoroCreate(g);
-    CoroManagerSchedule();
+    CoroInit();
 }
